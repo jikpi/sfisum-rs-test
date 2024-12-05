@@ -67,7 +67,7 @@ where
         }
     }
 
-    pub fn hash(&mut self) -> io::Result<()> {
+    pub fn calc_hash(&mut self) -> io::Result<()> {
         match H::new_from_file(&self.path) {
             Ok(hash) => {
                 self.hash = Some(hash);

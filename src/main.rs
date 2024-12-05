@@ -16,7 +16,7 @@ fn main() {
 
     for mut file in ds.files {
         file.check_exists();
-        file.hash().expect("TODO: panic message");
+        file.calc_hash().expect("TODO: panic message");
 
         println!(
             "File: {:?}, hash: {:?}",
