@@ -1,22 +1,13 @@
+use crate::file_rep::file_metadata::FileMetadata;
 use crate::file_rep::hash::HashValue;
 use std::io;
 use std::path::PathBuf;
-use std::time::SystemTime;
 
-pub struct FileMetadata {
-    pub last_modified: SystemTime,
-    pub size: u64,
-}
 
-impl FileMetadata {
-    pub fn new(last_modified: SystemTime, size: u64) -> Self {
-        FileMetadata {
-            last_modified,
-            size,
-        }
-    }
-}
-
+/// Represents a file, whether it exists or not (Filesystem, Directory digest)
+/// Has a full path to the file, metadata, and an optional hash
+///
+///
 pub struct FileSt<H>
 where
     H: HashValue,
@@ -32,7 +23,7 @@ where
 {
     pub fn new(path: PathBuf, hash: Option<H>, metadata: FileMetadata) -> Self {
         FileSt {
-            path,
+            path: path,
             hash,
             metadata,
         }
@@ -43,7 +34,7 @@ where
         let metadata = path.metadata()?;
         let metadata = FileMetadata::new(metadata.modified()?, metadata.len());
         Ok(FileSt {
-            path,
+            path: path,
             hash: None,
             metadata,
         })
@@ -68,7 +59,7 @@ where
     }
 
     pub fn calc_hash(&mut self) -> io::Result<()> {
-        match H::new_from_file(&self.path) {
+        match H::new_hash_file(&self.path) {
             Ok(hash) => {
                 self.hash = Some(hash);
                 Ok(())
