@@ -2,11 +2,11 @@ use crate::constants::DD_COMMENT_CHAR;
 use crate::file_rep::directory_snapshot::DirectorySnapshot;
 use crate::file_rep::file_metadata::FileMetadata;
 use crate::file_rep::file_st::FileSt;
+use crate::file_rep::hash_def::HashValue;
 use std::fs::File;
 use std::io;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
-use crate::file_rep::hash_def::HashValue;
 
 ///Returns a DirectorySnapshot from a digest file. The DirectorySnapshot will be filled
 /// with all the information from the digest file.
@@ -23,17 +23,17 @@ use crate::file_rep::hash_def::HashValue;
 /// <any other comments>
 /// C Hash: <hash type>
 /// C Size: 2999880, Last modified: 1733589895
-/// *\Desktop\test\text.docx 4534bfadb395bc299157d52eac16c368
+/// 4534bfadb395bc299157d52eac16c368 *\Desktop\test\text.docx
 /// C Size: 2999880, Last modified: 1733589895
-/// *\Desktop\test\text.docx 4534bfadb395bc299157d52eac16c368
+/// 4534bfadb395bc299157d52eac16c368 *\Desktop\test\text.docx
 /// ...
 ///
 /// <any other comments>
 pub fn read_parse_dd<H: HashValue>(
-    file_path: &PathBuf,
-    base_path: Option<&PathBuf>,
+    dd_file_path: &PathBuf,
+    base_path: &PathBuf,
 ) -> io::Result<DirectorySnapshot<H>> {
-    let file = File::open(&file_path)?;
+    let file = File::open(&dd_file_path)?;
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
 
@@ -83,8 +83,8 @@ pub fn read_parse_dd<H: HashValue>(
                     if let Some(Ok(file_line)) = lines.next() {
                         //Must not be a comment or empty
                         if !file_line.starts_with(DD_COMMENT_CHAR) && !file_line.trim().is_empty() {
-                            //Split at the last space to get the file path and hash
-                            if let Some((path_str, hash_str)) = file_line.rsplit_once(' ') {
+                            //Split at the first space to get the file path and hash
+                            if let Some((hash_str, path_str)) = file_line.split_once(' ') {
                                 if let Some(hash) = H::new_from_string(hash_str) {
                                     //Remove the '*'
                                     let path_str = if path_str.starts_with('*') {
@@ -105,7 +105,7 @@ pub fn read_parse_dd<H: HashValue>(
                                     };
 
                                     files.push(FileSt::new(
-                                        PathBuf::from(path_str),
+                                        base_path.join(&path_str),
                                         Some(hash),
                                         metadata,
                                     ));
@@ -132,17 +132,62 @@ pub fn read_parse_dd<H: HashValue>(
         ));
     }
 
-    //Determine base path
-    if let Some(base_path) = base_path {
-        //Use base path if provided
-        Ok(DirectorySnapshot::new(base_path.clone(), files))
-    } else if let Some(base_path) = file_path.parent() {
-        //Use the directory of the digest file as the base directory
-        Ok(DirectorySnapshot::new(base_path.to_path_buf(), files))
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::NotADirectory,
-            "Failed to determine base path",
-        ))
+    Ok(DirectorySnapshot::new(base_path.to_path_buf(), files))
+}
+
+pub fn write_dd<H: HashValue>(
+    snapshot: &DirectorySnapshot<H>,
+    dd_file_path: &PathBuf,
+) -> io::Result<()> {
+    let file = File::create(dd_file_path)?;
+    let mut writer = BufWriter::new(file);
+
+    //Title
+    writeln!(
+        writer,
+        "{} Directory digest generated at {}",
+        DD_COMMENT_CHAR,
+        //chrono::Local::now().to_rfc3339()
+        "unknown"
+    )?;
+
+    //Hash signature
+    writeln!(
+        writer,
+        "{} Hash: {}",
+        DD_COMMENT_CHAR,
+        H::signature_to_string()
+    )?;
+
+    let base_path = snapshot.base_path.as_path();
+
+    for file in &snapshot.files {
+        //Metadata comment
+        writeln!(writer, "{} {}", DD_COMMENT_CHAR, file.metadata.to_string())?;
+
+        //Split path into relative path
+        let rel_path = file
+            .path
+            .strip_prefix(base_path)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        let path_str = rel_path.to_string_lossy();
+
+        //Get hash
+        let hash_str = file
+            .hash
+            .as_ref()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "BUG: File entry missing hash value",
+                )
+            })?
+            .to_string();
+
+        writeln!(writer, "{} *{}", hash_str, path_str)?;
     }
+
+    writer.flush()?;
+    Ok(())
 }

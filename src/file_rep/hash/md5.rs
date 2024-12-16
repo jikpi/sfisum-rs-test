@@ -90,6 +90,10 @@ impl HashValue for HashMD5 {
         input.as_ref() == "MD5"
     }
 
+    fn signature_to_string() -> &'static str {
+        "MD5"
+    }
+
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write(&self.0);
     }

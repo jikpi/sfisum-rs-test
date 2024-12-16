@@ -30,6 +30,8 @@ pub trait HashValue: Sized + Eq + Ord {
 
     fn parse_hash_type_string<S: AsRef<str>>(input: S) -> bool;
 
+    fn signature_to_string() -> &'static str;
+
     //custom hashing for rust
     fn hash<H: Hasher>(&self, state: &mut H);
 }

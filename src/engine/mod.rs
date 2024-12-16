@@ -1,2 +1,2 @@
 mod engine;
-mod dd_file_rw;
+pub mod dd_file_rw;
