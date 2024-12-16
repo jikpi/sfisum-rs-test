@@ -2,11 +2,11 @@ use crate::constants::DD_COMMENT_CHAR;
 use crate::file_rep::directory_snapshot::DirectorySnapshot;
 use crate::file_rep::file_metadata::FileMetadata;
 use crate::file_rep::file_st::FileSt;
-use crate::file_rep::hash::HashValue;
 use std::fs::File;
 use std::io;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
+use crate::file_rep::hash_def::HashValue;
 
 ///Returns a DirectorySnapshot from a digest file. The DirectorySnapshot will be filled
 /// with all the information from the digest file.

@@ -1,8 +1,8 @@
 use crate::file_rep::file_metadata::FileMetadata;
 use crate::file_rep::file_st::FileSt;
-use crate::file_rep::hash::HashValue;
 use std::path::PathBuf;
 use std::{fs, io};
+use crate::file_rep::hash_def::HashValue;
 
 /// Represents a snapshot of a directory, containing all files and their metadata
 /// The directory is created either from a filesystem or a directory digest

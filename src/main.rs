@@ -1,6 +1,7 @@
 use crate::file_rep::directory_snapshot::DirectorySnapshot;
-use crate::file_rep::hash::{HashMD5, HashValue};
+use crate::file_rep::hash::md5::HashMD5;
 use std::path::PathBuf;
+use crate::file_rep::hash_def::HashValue;
 
 mod constants;
 mod engine;

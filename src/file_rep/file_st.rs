@@ -1,8 +1,8 @@
 use crate::file_rep::file_metadata::FileMetadata;
-use crate::file_rep::hash::HashValue;
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::PathBuf;
-
+use crate::file_rep::hash_def::HashValue;
 
 /// Represents a file, whether it exists or not (Filesystem, Directory digest)
 /// Has a full path to the file, metadata, and an optional hash
@@ -68,3 +68,23 @@ where
         }
     }
 }
+
+impl<H: HashValue> Hash for FileSt<H> {
+    fn hash<T: Hasher>(&self, state: &mut T) {
+        match &self.hash {
+            Some(hash) => hash.hash(state),
+            None => panic!("BUG: Attempted to hash FileSt with no hash value"),
+        }
+    }
+}
+
+impl<H: HashValue> PartialEq for FileSt<H> {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.hash, &other.hash) {
+            (Some(h1), Some(h2)) => h1.equals(h2),
+            _ => self.path == other.path,
+        }
+    }
+}
+
+impl<H: HashValue> Eq for FileSt<H> {}
