@@ -2,7 +2,7 @@ use crate::constants::DD_COMMENT_CHAR;
 use crate::file_rep::directory_snapshot::DirectorySnapshot;
 use crate::file_rep::file_metadata::FileMetadata;
 use crate::file_rep::file_st::FileSt;
-use crate::file_rep::hash_def::HashValue;
+use crate::file_rep::hash_def::{HashValue};
 use std::fs::File;
 use std::io;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -145,10 +145,11 @@ pub fn write_dd<H: HashValue>(
     //Title
     writeln!(
         writer,
-        "{} Directory digest generated at {}",
+        "{} Directory digest generated at {} containing {} entries",
         DD_COMMENT_CHAR,
         //chrono::Local::now().to_rfc3339()
-        "unknown"
+        "unknown",
+        snapshot.files.len()
     )?;
 
     //Hash signature
@@ -175,7 +176,7 @@ pub fn write_dd<H: HashValue>(
 
         //Get hash
         let hash_str = file
-            .hash
+            .loaded_hash
             .as_ref()
             .ok_or_else(|| {
                 io::Error::new(

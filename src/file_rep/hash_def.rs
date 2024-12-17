@@ -8,6 +8,13 @@ pub enum HashType {
     MD5,
 }
 
+pub fn hash_type_file_suffix_parse<S: AsRef<str>>(input: S) -> Option<HashType> {
+    match input.as_ref() {
+        "ddmd5" => Some(HashType::MD5),
+        _ => None,
+    }
+}
+
 pub trait HashValue: Sized + Eq + Ord {
     //create from a slice of bytes
     fn new(bytes: &[u8]) -> Option<Self>;
