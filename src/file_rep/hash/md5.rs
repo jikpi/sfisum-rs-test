@@ -1,10 +1,11 @@
 use crate::file_rep::file_hasher::hash_file;
 use crate::file_rep::hash_def::{HashType, HashValue};
 use std::cmp::Ordering;
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone)]
 pub struct HashMD5([u8; 16]);
 
 impl HashValue for HashMD5 {
@@ -87,15 +88,11 @@ impl HashValue for HashMD5 {
     }
 
     fn parse_hash_type_string<S: AsRef<str>>(input: S) -> bool {
-        input.as_ref() == "MD5"
+        input.as_ref() == "md5"
     }
 
     fn signature_to_string() -> &'static str {
-        "MD5"
-    }
-
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write(&self.0);
+        "md5"
     }
 }
 
@@ -107,15 +104,9 @@ impl PartialEq for HashMD5 {
 
 impl Eq for HashMD5 {}
 
-impl PartialOrd for HashMD5 {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.compare(other))
-    }
-}
-
-impl Ord for HashMD5 {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.compare(other)
+impl Hash for HashMD5 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write(&self.0)
     }
 }
 

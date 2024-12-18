@@ -1,3 +1,4 @@
-mod engine;
+pub mod engine;
 pub mod dd_file_rw;
-mod engine_factory;
+pub mod engine_factory;
+mod hash_calc_planner;

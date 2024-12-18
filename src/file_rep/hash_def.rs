@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::PathBuf;
 //alternative: simply hash with Vec<u8> but then its slower
@@ -8,14 +8,27 @@ pub enum HashType {
     MD5,
 }
 
-pub fn hash_type_file_suffix_parse<S: AsRef<str>>(input: S) -> Option<HashType> {
+pub fn hash_type_suffix_parse<S: AsRef<str>>(input: S) -> Option<HashType> {
     match input.as_ref() {
         "ddmd5" => Some(HashType::MD5),
         _ => None,
     }
 }
 
-pub trait HashValue: Sized + Eq + Ord {
+pub fn hash_type_to_suffix(hash_type: &HashType) -> &'static str {
+    match hash_type {
+        HashType::MD5 => "ddmd5",
+    }
+}
+
+pub fn hash_string_to_type<S: AsRef<str>>(input: S) -> Option<HashType> {
+    match input.as_ref() {
+        "md5" => Some(HashType::MD5),
+        _ => None,
+    }
+}
+
+pub trait HashValue: Sized + Eq + Hash + Clone {
     //create from a slice of bytes
     fn new(bytes: &[u8]) -> Option<Self>;
     fn new_hash_file(path: &PathBuf) -> io::Result<Self>;
@@ -38,7 +51,4 @@ pub trait HashValue: Sized + Eq + Ord {
     fn parse_hash_type_string<S: AsRef<str>>(input: S) -> bool;
 
     fn signature_to_string() -> &'static str;
-
-    //custom hashing for rust
-    fn hash<H: Hasher>(&self, state: &mut H);
 }

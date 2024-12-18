@@ -1,5 +1,6 @@
 use std::time::SystemTime;
 
+#[derive(Debug)]
 pub struct FileMetadata {
     pub last_modified: SystemTime,
     pub size: u64,

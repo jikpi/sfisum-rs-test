@@ -1,8 +1,7 @@
 use crate::constants::DD_COMMENT_CHAR;
-use crate::file_rep::directory_snapshot::DirectorySnapshot;
 use crate::file_rep::file_metadata::FileMetadata;
 use crate::file_rep::file_st::FileSt;
-use crate::file_rep::hash_def::{HashValue};
+use crate::file_rep::hash_def::{hash_string_to_type, HashType, HashValue};
 use std::fs::File;
 use std::io;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -29,17 +28,19 @@ use std::path::PathBuf;
 /// ...
 ///
 /// <any other comments>
-pub fn read_parse_dd<H: HashValue>(
+pub fn read_dd<H: HashValue>(
     dd_file_path: &PathBuf,
     base_path: &PathBuf,
-) -> io::Result<DirectorySnapshot<H>> {
+) -> io::Result<Vec<FileSt<H>>> {
     let file = File::open(&dd_file_path)?;
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
 
     //Skip all lines until 'C Hash: <hash type>'
     let mut hash_type_line = None;
+    let mut current_line = 0;
     while let Some(Ok(line)) = lines.next() {
+        current_line += 1;
         if line.starts_with(&format!("{} ", DD_COMMENT_CHAR)) {
             //Get the line, and remove the comment and space
             if let Some(hash_str) = line.strip_prefix(&format!("{} ", DD_COMMENT_CHAR)) {
@@ -55,19 +56,27 @@ pub fn read_parse_dd<H: HashValue>(
     let hash_type_line = hash_type_line.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            "Failed to find hash type in digest file",
+            format!(
+                "Failed to find hash type in digest file (processed {} lines)",
+                current_line
+            ),
         )
     })?;
 
     //Parse hash type
     let hash_type = hash_type_line
         .strip_prefix(&format!("{} Hash: ", DD_COMMENT_CHAR))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Failed to parse hash type"))?;
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Failed to parse hash type at line {}", current_line),
+            )
+        })?;
 
     if !H::parse_hash_type_string(hash_type) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "Unsupported hash type",
+            format!("Unsupported hash type at line {}", current_line),
         ));
     }
 
@@ -75,12 +84,14 @@ pub fn read_parse_dd<H: HashValue>(
 
     //Parse (metadata x file) entries
     while let Some(Ok(line)) = lines.next() {
+        current_line += 1;
         if line.starts_with(&format!("{} ", DD_COMMENT_CHAR)) {
             //Try to parse metadata
             if let Some(metadata_str) = line.strip_prefix(&format!("{} ", DD_COMMENT_CHAR)) {
                 if let Ok(metadata) = FileMetadata::new_from_string(metadata_str) {
                     //Parse file entry on the next line
                     if let Some(Ok(file_line)) = lines.next() {
+                        current_line += 1;
                         //Must not be a comment or empty
                         if !file_line.starts_with(DD_COMMENT_CHAR) && !file_line.trim().is_empty() {
                             //Split at the first space to get the file path and hash
@@ -117,7 +128,10 @@ pub fn read_parse_dd<H: HashValue>(
                     //If any of the above fails, return an error
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        "Invalid metadata + file entry format in digest file",
+                        format!(
+                            "Invalid metadata + file entry format in digest file at line {}",
+                            current_line
+                        ),
                     ));
                 }
             }
@@ -128,16 +142,20 @@ pub fn read_parse_dd<H: HashValue>(
     if files.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "No valid file entries found",
+            format!(
+                "No valid file entries found after processing {} lines",
+                current_line
+            ),
         ));
     }
 
-    Ok(DirectorySnapshot::new(base_path.to_path_buf(), files))
+    Ok(files)
 }
 
 pub fn write_dd<H: HashValue>(
-    snapshot: &DirectorySnapshot<H>,
+    snapshot: &Vec<&FileSt<H>>,
     dd_file_path: &PathBuf,
+    base_path: &PathBuf,
 ) -> io::Result<()> {
     let file = File::create(dd_file_path)?;
     let mut writer = BufWriter::new(file);
@@ -147,9 +165,8 @@ pub fn write_dd<H: HashValue>(
         writer,
         "{} Directory digest generated at {} containing {} entries",
         DD_COMMENT_CHAR,
-        //chrono::Local::now().to_rfc3339()
-        "unknown",
-        snapshot.files.len()
+        chrono::Local::now().to_rfc3339(),
+        snapshot.len()
     )?;
 
     //Hash signature
@@ -160,9 +177,9 @@ pub fn write_dd<H: HashValue>(
         H::signature_to_string()
     )?;
 
-    let base_path = snapshot.base_path.as_path();
+    let base_path = base_path.as_path();
 
-    for file in &snapshot.files {
+    for file in snapshot.iter() {
         //Metadata comment
         writeln!(writer, "{} {}", DD_COMMENT_CHAR, file.metadata.to_string())?;
 
@@ -176,7 +193,7 @@ pub fn write_dd<H: HashValue>(
 
         //Get hash
         let hash_str = file
-            .loaded_hash
+            .calculated_hash
             .as_ref()
             .ok_or_else(|| {
                 io::Error::new(
@@ -191,4 +208,27 @@ pub fn write_dd<H: HashValue>(
 
     writer.flush()?;
     Ok(())
+}
+
+pub fn parse_dd_hash_type(dd_file_path: &PathBuf) -> Option<HashType> {
+    let file = File::open(&dd_file_path).ok()?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+
+    //Skip all lines until 'C Hash: <hash type>'
+    while let Some(Ok(line)) = lines.next() {
+        if line.starts_with(&format!("{} ", DD_COMMENT_CHAR)) {
+            //Get the line, and remove the comment and space
+            if let Some(hash_str) = line.strip_prefix(&format!("{} ", DD_COMMENT_CHAR)) {
+                if hash_str.starts_with("Hash: ") {
+                    // Extract the hash type
+                    if let Some(hash_type_str) = hash_str.strip_prefix("Hash: ") {
+                        return hash_string_to_type(hash_type_str);
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
