@@ -21,16 +21,19 @@ pub trait EngineAny {
     fn start_validate(&mut self) -> Result<(), String>;
     fn start_fast_refresh(&mut self) -> Result<(), String>;
     fn start_full_refresh(&mut self) -> Result<(), String>;
+    fn start_find_duplicates(&mut self) -> Result<(), String>;
 
     fn print_log_generate(&self);
     fn print_log_validate(&self);
-    fn print_log_fast_refresh(&self);
-    fn print_log_full_refresh(&self);
+    fn print_log_refresh(&self);
+    fn print_log_find_duplicates(&self);
+    fn print_log(&self);
 
     fn event_count_generate(&self) -> usize;
     fn event_count_validate(&self) -> usize;
     fn event_count_fast_refresh(&self) -> usize;
     fn event_count_full_refresh(&self) -> usize;
+    fn event_count_find_duplicates(&self) -> usize;
 }
 
 #[derive(PartialEq)]
@@ -39,6 +42,7 @@ enum Mode {
     Validate,
     FastRefresh,
     FullRefresh,
+    FindDuplicates,
 }
 
 pub struct Engine<H>
@@ -56,7 +60,6 @@ where
     hashing_error_index: Vec<usize>,
     invalid_hash_index: Vec<usize>,
 
-    dirty_files_index: Vec<usize>,
     dirty_valid_files_index: Vec<usize>,
     dirty_potentially_invalid_s_files_index: Vec<usize>,
     dirty_potentially_invalid_d_files_index: Vec<usize>,
@@ -66,6 +69,8 @@ where
     crosscheck_secondary_orphans_index: Vec<usize>,
     crosscheck_primary_orphans_index: Vec<usize>,
     crosscheck_secondary_orphan_but_duplicate_index: Vec<usize>,
+
+    duplicate_files_index: Vec<Vec<usize>>,
 }
 
 impl<H: HashValue + Sync + Send + std::fmt::Debug> EngineAny for Engine<H>
@@ -85,7 +90,6 @@ where
             mode: None,
             hashing_error_index: Vec::new(),
             invalid_hash_index: Vec::new(),
-            dirty_files_index: Vec::new(),
             dirty_potentially_invalid_s_files_index: Vec::new(),
             dirty_potentially_invalid_d_files_index: Vec::new(),
             dirty_potentially_invalid_sd_files_index: Vec::new(),
@@ -94,6 +98,7 @@ where
             crosscheck_secondary_orphans_index: Vec::new(),
             crosscheck_primary_orphans_index: Vec::new(),
             crosscheck_secondary_orphan_but_duplicate_index: Vec::new(),
+            duplicate_files_index: Vec::new(),
         }
     }
 
@@ -258,7 +263,7 @@ where
         }
 
         let mut only_in_primary_index: Vec<usize> = Vec::new();
-        let mut only_in_secondary_index: Vec<usize> = Vec::new();
+        let only_in_secondary_index: Vec<usize>;
         let mut in_both_index: Vec<(usize, usize)> = Vec::new(); // (primary_id, secondary_id)
 
         //Get the indexes for the files
@@ -380,7 +385,7 @@ where
 
         let mut primary_new_files_hash_index: HashMap<H, Vec<usize>> = HashMap::new();
 
-        for (index) in only_in_primary_index.iter() {
+        for index in only_in_primary_index.iter() {
             let file = &self.primary_ds[*index];
             if let Some(hash) = &file.calculated_hash {
                 primary_new_files_hash_index
@@ -394,7 +399,7 @@ where
 
         let mut secondary_files_hash_index: HashMap<H, Vec<usize>> = HashMap::new();
 
-        for (index) in 0..self.secondary_ds.len() {
+        for index in 0..self.secondary_ds.len() {
             let file = &self.secondary_ds[index];
             if let Some(hash) = &file.loaded_hash {
                 secondary_files_hash_index
@@ -408,7 +413,7 @@ where
 
         let mut found_primary_indexes: HashSet<usize> = HashSet::new();
 
-        for (index) in only_in_secondary_index.iter() {
+        for index in only_in_secondary_index.iter() {
             let file = &self.secondary_ds[*index];
             if let Some(hash) = &file.loaded_hash {
                 if let Some(primary_indexes) = primary_new_files_hash_index.get(hash) {
@@ -429,6 +434,8 @@ where
                     //scenario: fileA, fileB, fileC have the same hash. if fileA is not in primary,
                     //but fileB and fileC are, then fileA is an orphan - but since fileB and fileC are
                     //in both primary and secondary, they are not orphans.
+                    //todo: extend this logic to also
+                    //todo: check if the duplicate of the file appears in 'in both'?
                     match secondary_files_hash_index.get(hash) {
                         Some(indexes) => {
                             if indexes.len() == 1 {
@@ -451,7 +458,7 @@ where
             }
         }
 
-        for (index) in only_in_primary_index.iter() {
+        for index in only_in_primary_index.iter() {
             if !found_primary_indexes.contains(index) {
                 self.crosscheck_primary_orphans_index.push(*index);
             }
@@ -479,11 +486,14 @@ where
             primary_file.calculated_hash = Some(secondary_hash.clone());
         }
 
-        //print all primary files that dont have a hash
-        for (index, file) in self.primary_ds.iter().enumerate() {
-            if file.calculated_hash.is_none() {
-                println!("Primary file at index {} has no hash", index);
-                println!("Path: {}", file.path.display());
+        //DEBUG: print all primary files that don't have a hash
+        #[cfg(debug_assertions)]
+        {
+            for (index, file) in self.primary_ds.iter().enumerate() {
+                if file.calculated_hash.is_none() {
+                    println!("Primary file at index {} has no hash", index);
+                    println!("Path: {}", file.path.display());
+                }
             }
         }
 
@@ -491,7 +501,211 @@ where
     }
 
     fn start_full_refresh(&mut self) -> Result<(), String> {
-        todo!()
+        if let None = self.mode {
+            self.mode = Some(Mode::FullRefresh);
+        } else {
+            return Err("BUG: Engine is already in a mode".to_string());
+        }
+
+        let mut dir_walker: DirectoryWalker<H> = DirectoryWalker::new(self.base_path.clone());
+        match dir_walker.walk() {
+            Err(e) => return Err(format!("Error when walking the directory: {}", e)),
+            _ => {}
+        }
+
+        //Primary snapshot is from disk
+        self.primary_ds = dir_walker.into_files();
+
+        match calculate_hashes(
+            &mut self.primary_ds,
+            SMALL_FILE_THREADS,
+            LARGE_FILE_THREADS,
+            SMALL_FILE_SIZE_THRESHOLD,
+            None,
+        ) {
+            Ok(error_indexes) => {
+                if let Some(indexes) = error_indexes {
+                    self.hashing_error_index = indexes;
+                }
+            }
+            Err(e) => return Err(format!("Failed to calculate hashes: {}", e)),
+        }
+
+        //Secondary snapshot is from the file
+        self.secondary_ds = read_dd(&self.dd_file_path, &self.base_path)
+            .map_err(|e| format!("Failed to read dd file: {}", e))?;
+
+        //A hashmap of Path->Index for Primary snap
+        let mut primary_paths_index: HashMap<&Path, usize> = HashMap::new();
+
+        for (index, file) in self.primary_ds.iter().enumerate() {
+            primary_paths_index.insert(file.path.as_path(), index);
+        }
+
+        //A hashmap of Path->Index for Secondary snap
+        let mut secondary_paths_index: HashMap<&Path, usize> = HashMap::new();
+
+        for (index, file) in self.secondary_ds.iter().enumerate() {
+            secondary_paths_index.insert(file.path.as_path(), index);
+        }
+
+        let mut only_in_primary_index: Vec<usize> = Vec::new();
+        let only_in_secondary_index: Vec<usize>;
+        let mut in_both_index: Vec<(usize, usize)> = Vec::new(); // (primary_id, secondary_id)
+
+        //Get the indexes for the files
+        for (&path, &primary_idx) in &primary_paths_index {
+            match secondary_paths_index.get(path) {
+                Some(&secondary_idx) => in_both_index.push((primary_idx, secondary_idx)),
+                None => only_in_primary_index.push(primary_idx),
+            }
+        }
+
+        only_in_secondary_index = secondary_paths_index
+            .iter()
+            .filter(|(&path, _)| !primary_paths_index.contains_key(path))
+            .map(|(_, &idx)| idx)
+            .collect();
+
+        let mut dirty_files_index: Vec<(usize, usize)> = Vec::new();
+
+        //Get dirty files (files that have different hash)
+        for (primary_index, secondary_index) in in_both_index.iter() {
+            let primary_file = &self.primary_ds[*primary_index];
+            let secondary_file = &self.secondary_ds[*secondary_index];
+
+            let primary_hash = primary_file
+                .calculated_hash
+                .as_ref()
+                .expect("BUG: In full refresh, 'calculated hash' has no hash");
+
+            let secondary_hash = secondary_file
+                .loaded_hash
+                .as_ref()
+                .expect("BUG: In full refresh, 'loaded hash' has no hash");
+
+            if !primary_hash.equals(secondary_hash) {
+                dirty_files_index.push((*primary_index, *secondary_index));
+                continue;
+            }
+        }
+
+        //Mark files that have invalid hashes to generate a report later
+
+        for (primary_file_index, secondary) in &dirty_files_index {
+            //if hash is not the same, and date and size are the same, then the file is invalid
+            let primary_file = &self.primary_ds[*primary_file_index];
+            let secondary_file = &self.secondary_ds[*secondary];
+
+            //both date and size are same
+            if primary_file.metadata.size == secondary_file.metadata.size
+                && primary_file.metadata.last_modified == secondary_file.metadata.last_modified
+            {
+                self.invalid_hash_index.push(*primary_file_index);
+            }
+            //only the size is different
+            else if primary_file.metadata.size != secondary_file.metadata.size
+                && primary_file.metadata.last_modified == secondary_file.metadata.last_modified
+            {
+                self.dirty_potentially_invalid_s_files_index
+                    .push(*primary_file_index);
+            }
+            //only the date is different
+            else if primary_file.metadata.size == secondary_file.metadata.size
+                && primary_file.metadata.last_modified != secondary_file.metadata.last_modified
+            {
+                self.dirty_potentially_invalid_d_files_index
+                    .push(*primary_file_index);
+            }
+            //both date and size are different
+            else {
+                self.dirty_potentially_invalid_sd_files_index
+                    .push(*primary_file_index);
+            }
+        }
+
+        //Cross compare the files that are only in primary and secondary
+
+        let mut primary_files_hash_index: HashMap<H, Vec<usize>> = HashMap::new();
+
+        for primary_index in 0..self.primary_ds.len() {
+            let file = &self.primary_ds[primary_index];
+            if let Some(hash) = &file.calculated_hash {
+                primary_files_hash_index
+                    .entry(hash.clone())
+                    .or_insert_with(Vec::new)
+                    .push(primary_index);
+            } else {
+                panic!("File at index {} has no calculated hash", primary_index);
+            }
+        }
+
+        let mut found_primary_indexes: HashSet<usize> = HashSet::new();
+
+        for index in only_in_secondary_index.iter() {
+            let file = &self.secondary_ds[*index];
+            if let Some(hash) = &file.loaded_hash {
+                if let Some(primary_indexes) = primary_files_hash_index.get(hash) {
+                    //update found_primary_indexes
+                    found_primary_indexes.extend(primary_indexes.iter().cloned());
+
+                    if let Some((_, secondary_indexes)) = self
+                        .crosscheck_primary_to_secondary_found_index
+                        .get_mut(hash)
+                    {
+                        secondary_indexes.push(*index);
+                    } else {
+                        self.crosscheck_primary_to_secondary_found_index
+                            .insert(hash.clone(), (primary_indexes.clone(), vec![*index]));
+                    }
+                } else {
+                    self.crosscheck_secondary_orphans_index.push(*index);
+                }
+            } else {
+                panic!("BUG: File at index {} has no loaded hash", index);
+            }
+        }
+
+        for index in only_in_primary_index.iter() {
+            if !found_primary_indexes.contains(index) {
+                self.crosscheck_primary_orphans_index.push(*index);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn start_find_duplicates(&mut self) -> Result<(), String> {
+        if let None = self.mode {
+            self.mode = Some(Mode::FindDuplicates);
+        } else {
+            return Err("BUG: Engine is already in a mode".to_string());
+        }
+
+        self.primary_ds = read_dd(&self.dd_file_path, &self.base_path)
+            .map_err(|e| format!("Failed to read dd file: {}", e))?;
+
+        let mut primary_files_hash_index: HashMap<H, Vec<usize>> = HashMap::new();
+
+        for primary_index in 0..self.primary_ds.len() {
+            let file = &self.primary_ds[primary_index];
+            if let Some(hash) = &file.loaded_hash {
+                primary_files_hash_index
+                    .entry(hash.clone())
+                    .or_insert_with(Vec::new)
+                    .push(primary_index);
+            } else {
+                panic!("File at index {} has no loaded hash", primary_index);
+            }
+        }
+
+        for (_, indexes) in primary_files_hash_index.iter() {
+            if indexes.len() > 1 {
+                self.duplicate_files_index.push(indexes.clone());
+            }
+        }
+
+        Ok(())
     }
 
     // ############################################################################################
@@ -518,7 +732,6 @@ where
             }
         }
     }
-
     fn print_log_validate(&self) {
         if self.mode != Some(Mode::Validate) {
             println!(
@@ -556,12 +769,11 @@ where
             }
         }
     }
-
-    fn print_log_fast_refresh(&self) {
-        if self.mode != Some(Mode::FastRefresh) {
+    fn print_log_refresh(&self) {
+        if self.mode != Some(Mode::FastRefresh) && self.mode != Some(Mode::FullRefresh) {
             println!(
                 "{}",
-                colorize_txt(TextColor::Red, "BUG: Engine is not in generate mode")
+                colorize_txt(TextColor::Red, "BUG: Engine is not in refresh mode")
             );
             return;
         }
@@ -573,17 +785,56 @@ where
             + self.dirty_potentially_invalid_s_files_index.len()
             + self.dirty_potentially_invalid_sd_files_index.len()
             + self.crosscheck_secondary_orphans_index.len()
-            + self.crosscheck_primary_orphans_index.len()
-            + self.crosscheck_secondary_orphan_but_duplicate_index.len();
+            + self.crosscheck_primary_orphans_index.len();
+
+        if self.mode == Some(Mode::FastRefresh) {
+            self.crosscheck_secondary_orphan_but_duplicate_index.len();
+        }
 
         let error = self.invalid_hash_index.len() + self.hashing_error_index.len();
+
+        // --------------
+
+        let only_in_primary = self.crosscheck_primary_orphans_index.len();
+        let only_in_secondary = self.crosscheck_secondary_orphans_index.len();
 
         println!(
             "{}",
             colorize_txt(
                 TextColor::BrightYellow,
                 &format!(
-                    "There are {} successfull operations, {} warnings and {} errors",
+                    "Out of {} files on disk and {} files in the digest file, {} files could only be found on disk and {} files could only be found in the digest file.",
+                    self.primary_ds.len(), self.secondary_ds.len(), only_in_primary, only_in_secondary
+                )
+            )
+        );
+
+        // --------------
+
+        if self.mode == Some(Mode::FullRefresh) {
+            let invalid = self.invalid_hash_index.len()
+                + self.dirty_potentially_invalid_s_files_index.len()
+                + self.dirty_potentially_invalid_d_files_index.len()
+                + self.dirty_potentially_invalid_sd_files_index.len();
+            println!(
+                "{}",
+                colorize_txt(
+                    TextColor::BrightYellow,
+                    &format!(
+                        "{} out of {} files have a different hash.",
+                        invalid,
+                        self.primary_ds.len()
+                    )
+                )
+            );
+        }
+
+        println!(
+            "{}",
+            colorize_txt(
+                TextColor::BrightYellow,
+                &format!(
+                    "There are {} successful operations, {} warnings and {} errors.",
                     ok, warning, error
                 )
             )
@@ -609,8 +860,8 @@ where
             println!(
                 "{}",
                 colorize_txt(
-                    TextColor::BrightYellow,
-                    "Files that have invalid hashes but identical size and last modified date:"
+                    TextColor::BrightRed,
+                    &format!("({}) Files that have invalid hashes and identical size and last modified date:", self.invalid_hash_index.len())
                 )
             );
             println!("{}", colorize_txt(TextColor::BrightRed, "######"));
@@ -627,7 +878,10 @@ where
                 "{}",
                 colorize_txt(
                     TextColor::BrightYellow,
-                    "Files that have different size and hash:"
+                    &format!(
+                        "({}) Files that have different size and hash:",
+                        self.dirty_potentially_invalid_s_files_index.len()
+                    )
                 )
             );
             println!("{}", colorize_txt(TextColor::BrightYellow, "######"));
@@ -644,7 +898,10 @@ where
                 "{}",
                 colorize_txt(
                     TextColor::BrightYellow,
-                    "Files that have different last modified date and hash:"
+                    &format!(
+                        "({}) Files that have different last modified date and hash:",
+                        self.dirty_potentially_invalid_d_files_index.len()
+                    )
                 )
             );
             println!("{}", colorize_txt(TextColor::BrightYellow, "######"));
@@ -661,7 +918,10 @@ where
                 "{}",
                 colorize_txt(
                     TextColor::BrightYellow,
-                    "Files that have different size, last modified date and hash:"
+                    &format!(
+                        "({}) Files that have different size, last modified date and hash:",
+                        self.dirty_potentially_invalid_sd_files_index.len()
+                    )
                 )
             );
             println!("{}", colorize_txt(TextColor::BrightYellow, "######"));
@@ -678,7 +938,10 @@ where
                 "{}",
                 colorize_txt(
                     TextColor::BrightMagenta,
-                    "Files that were only found in the digest file:"
+                    &format!(
+                        "({}) Files that were only found in the digest file:",
+                        self.crosscheck_secondary_orphans_index.len()
+                    )
                 )
             );
             println!("{}", colorize_txt(TextColor::BrightMagenta, "######"));
@@ -695,7 +958,10 @@ where
                 "{}",
                 colorize_txt(
                     TextColor::BrightMagenta,
-                    "Files that were only found on disk:"
+                    &format!(
+                        "({}) Files that were only found on disk:",
+                        self.crosscheck_primary_orphans_index.len()
+                    )
                 )
             );
             println!("{}", colorize_txt(TextColor::BrightMagenta, "######"));
@@ -705,17 +971,19 @@ where
             }
         }
 
-        //print all the duplicate secondary orphans
-        if !self
-            .crosscheck_secondary_orphan_but_duplicate_index
-            .is_empty()
+        //print all the duplicate secondary orphans (only in fast refresh mode)
+        if self.mode == Some(Mode::FastRefresh)
+            && !self
+                .crosscheck_secondary_orphan_but_duplicate_index
+                .is_empty()
         {
             println!("{}", colorize_txt(TextColor::BrightMagenta, "######"));
             println!(
                 "{}",
                 colorize_txt(
                     TextColor::BrightMagenta,
-                    "Files that were only found in the digest file and have duplicates in it:"
+                    &format!("({}) Files that were only found in the digest file and have duplicates in it:",
+                             self.crosscheck_secondary_orphan_but_duplicate_index.len())
                 )
             );
             println!("{}", colorize_txt(TextColor::BrightMagenta, "######"));
@@ -726,13 +994,14 @@ where
         }
 
         //print all the files that are validated
-        if !self.dirty_valid_files_index.is_empty() {
+        if self.mode == Some(Mode::FastRefresh) && !self.dirty_valid_files_index.is_empty() {
             println!("{}", colorize_txt(TextColor::BrightGreen, "######"));
             println!(
                 "{}",
                 colorize_txt(
                     TextColor::BrightGreen,
-                    "Files that have different date or last modified date, but identical hashes:"
+                    &format!("({}) Files that have different date or last modified date, but identical hashes:",
+                             self.dirty_valid_files_index.len())
                 )
             );
             println!("{}", colorize_txt(TextColor::BrightGreen, "######"));
@@ -747,7 +1016,13 @@ where
             println!("{}", colorize_txt(TextColor::BrightGreen, "######"));
             println!(
                 "{}",
-                colorize_txt(TextColor::BrightGreen, "Files that were found:")
+                colorize_txt(
+                    TextColor::BrightGreen,
+                    &format!(
+                        "({}) Files from digest that dont exist on disk but were found elsewhere:",
+                        self.crosscheck_primary_to_secondary_found_index.len()
+                    )
+                )
             );
             println!("{}", colorize_txt(TextColor::BrightGreen, "######"));
 
@@ -769,9 +1044,56 @@ where
         }
         println!("{}", colorize_txt(TextColor::BrightGreen, "------"));
     }
+    fn print_log_find_duplicates(&self) {
+        if self.mode != Some(Mode::FindDuplicates) {
+            println!(
+                "{}",
+                colorize_txt(TextColor::Red, "BUG: Engine is not in generate mode")
+            );
+            return;
+        }
 
-    fn print_log_full_refresh(&self) {
-        todo!()
+        //print all the files that are duplicates
+        if !self.duplicate_files_index.is_empty() {
+            println!("{}", colorize_txt(TextColor::BrightYellow, "######"));
+            println!(
+                "{}",
+                colorize_txt(TextColor::BrightYellow, "Duplicate files:")
+            );
+            println!("{}", colorize_txt(TextColor::BrightYellow, "######"));
+
+            for indexes in self.duplicate_files_index.iter() {
+                for index in indexes.iter() {
+                    println!("{}", self.primary_ds[*index].path.display());
+                }
+                println!("{}", colorize_txt(TextColor::BrightYellow, "-"));
+            }
+        }
+    }
+
+    fn print_log(&self) {
+        match &self.mode {
+            None => {
+                println!("BUG: Cannot print with no mode");
+            }
+            Some(mode) => match mode {
+                Mode::Generate => {
+                    self.print_log_generate();
+                }
+                Mode::Validate => {
+                    self.print_log_validate();
+                }
+                Mode::FastRefresh => {
+                    self.print_log_refresh();
+                }
+                Mode::FullRefresh => {
+                    self.print_log_refresh();
+                }
+                Mode::FindDuplicates => {
+                    self.print_log_find_duplicates();
+                }
+            },
+        }
     }
 
     fn event_count_generate(&self) -> usize {
@@ -796,7 +1118,18 @@ where
     }
 
     fn event_count_full_refresh(&self) -> usize {
-        todo!()
+        self.hashing_error_index.len()
+            + self.invalid_hash_index.len()
+            + self.dirty_potentially_invalid_d_files_index.len()
+            + self.dirty_potentially_invalid_s_files_index.len()
+            + self.dirty_potentially_invalid_sd_files_index.len()
+            + self.crosscheck_secondary_orphans_index.len()
+            + self.crosscheck_primary_orphans_index.len()
+            + self.crosscheck_primary_to_secondary_found_index.len()
+    }
+
+    fn event_count_find_duplicates(&self) -> usize {
+        self.duplicate_files_index.len()
     }
 }
 

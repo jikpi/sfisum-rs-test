@@ -1,7 +1,7 @@
 use crate::engine::dd_file_rw::parse_dd_hash_type;
 use crate::engine::engine::EngineAny;
 use crate::engine::engine_factory::{create_engine, dd_filename_to_hash_type};
-use crate::file_rep::hash_def::{hash_type_suffix_parse, HashType};
+use crate::file_rep::hash_def::HashType;
 use crate::util::console_text_formatter::{colorize_txt, TextColor};
 use std::path::PathBuf;
 
@@ -20,7 +20,8 @@ impl Sfisum {
             2) Validate Directory Digest\n\
             3) Fast Refresh Directory Digest\n\
             4) Full Refresh Directory Digest\n\
-            5) Exit\n"
+            5) Find duplicates\n\
+            6) Exit\n"
             );
 
             let mut input = String::new();
@@ -43,15 +44,16 @@ impl Sfisum {
                 }
             };
 
-            if input == 5 {
+            if input == 6 {
                 break;
             }
 
             match input {
                 1 => self.generate_cui(),
                 2 => self.validate_cui(),
-                3 => self.fast_refresh_cui(),
-                4 => println!("Full Refresh"),
+                3 => self.refresh_cui(true),
+                4 => self.refresh_cui(false),
+                5 => self.find_duplicates_cui(),
                 _ => println!(
                     "{}",
                     colorize_txt(
@@ -120,22 +122,24 @@ impl Sfisum {
 
         let event_count = engine.event_count_generate();
         if event_count > 0 {
-            println!(
-                "{}",
-                colorize_txt(
-                    TextColor::BrightBlue,
-                    &format!("There are {} events that occurred during hashing. Press enter to view them, or 'd' to discard.\n", event_count)
-                )
-            );
+            'discard_block: {
+                println!(
+                    "{}",
+                    colorize_txt(
+                        TextColor::BrightBlue,
+                        &format!("There are {} events that occurred during hashing. Press enter to view them, or 'd' to discard.\n", event_count)
+                    )
+                );
 
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input).unwrap();
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).unwrap();
 
-            if input.trim() == "d" {
-                return;
+                if input.trim() == "d" {
+                    break 'discard_block;
+                }
+
+                engine.print_log();
             }
-
-            engine.print_log_generate();
         } else {
             println!("No events occurred during hashing.\n");
         }
@@ -199,22 +203,24 @@ impl Sfisum {
 
         let event_count = engine.event_count_validate();
         if event_count > 0 {
-            println!(
-                "{}",
-                colorize_txt(
-                    TextColor::BrightBlue,
-                    &format!("There are {} events that occurred during validation. Press enter to view them, or 'd' to discard.\n", event_count)
-                )
-            );
+            'discard_block: {
+                println!(
+                    "{}",
+                    colorize_txt(
+                        TextColor::BrightBlue,
+                        &format!("There are {} events that occurred during validation. Press enter to view them, or 'd' to discard.\n", event_count)
+                    )
+                );
 
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input).unwrap();
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).unwrap();
 
-            if input.trim() == "d" {
-                return;
+                if input.trim() == "d" {
+                    break 'discard_block;
+                }
+
+                engine.print_log();
             }
-
-            engine.print_log_validate();
         } else {
             println!("No events occurred during validation.\n");
         }
@@ -222,7 +228,7 @@ impl Sfisum {
         println!("{}", colorize_txt(TextColor::BrightBlue, "\n######\n"));
     }
 
-    fn fast_refresh_cui(&self) {
+    fn refresh_cui(&self, fast: bool) {
         println!("Enter the path to the base directory:");
         let mut input = String::new();
         if std::io::stdin().read_line(&mut input).is_err() {
@@ -263,11 +269,20 @@ impl Sfisum {
 
         engine.set_paths(PathBuf::from(digest_path), PathBuf::from(base_dir_path));
 
-        match engine.start_fast_refresh() {
-            Ok(_) => println!(
-                "{}",
-                colorize_txt(TextColor::Green, "Fast refresh complete.\n")
-            ),
+        let operation_result = if fast {
+            engine.start_fast_refresh()
+        } else {
+            engine.start_full_refresh()
+        };
+
+        let result_text = if fast {
+            "Fast refresh complete.\n"
+        } else {
+            "Full refresh complete.\n"
+        };
+
+        match operation_result {
+            Ok(_) => println!("{}", colorize_txt(TextColor::Green, result_text)),
             Err(e) => {
                 println!(
                     "{}",
@@ -277,24 +292,31 @@ impl Sfisum {
             }
         }
 
-        let event_count = engine.event_count_fast_refresh();
+        let event_count = if fast {
+            engine.event_count_fast_refresh()
+        } else {
+            engine.event_count_full_refresh()
+        };
+
         if event_count > 0 {
-            println!(
-                "{}",
-                colorize_txt(
-                    TextColor::BrightBlue,
-                    &format!("There are {} events that occurred during validation. Press enter to view them, or 'd' to discard.\n", event_count)
-                )
-            );
+            'discard_block: {
+                println!(
+                    "{}",
+                    colorize_txt(
+                        TextColor::BrightBlue,
+                        &format!("There are {} events that occurred during validation. Press enter to view them, or 'd' to discard.\n", event_count)
+                    )
+                );
 
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input).unwrap();
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).unwrap();
 
-            if input.trim() == "d" {
-                return;
+                if input.trim() == "d" {
+                    break 'discard_block;
+                }
+
+                engine.print_log();
             }
-
-            engine.print_log_fast_refresh();
         } else {
             println!("No events occurred during validation.\n");
         }
@@ -340,5 +362,70 @@ impl Sfisum {
                 ),
             }
         }
+    }
+
+    fn find_duplicates_cui(&self) {
+        println!("Enter the path to the existing digest file:");
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_err() {
+            println!(
+                "{}",
+                colorize_txt(
+                    TextColor::Red,
+                    "Invalid input. Please enter a valid path.\n"
+                )
+            );
+            return;
+        }
+
+        let digest_path = input.trim();
+
+        println!("Path loaded. Press enter to continue.");
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).unwrap();
+
+        let mut engine: Box<dyn EngineAny> = match self.make_engine_from_dd_file_path(digest_path) {
+            Some(engine) => engine,
+            None => return,
+        };
+
+        engine.set_paths(PathBuf::from(digest_path), PathBuf::new());
+
+        match engine.start_find_duplicates() {
+            Ok(_) => println!("{}", colorize_txt(TextColor::Green, "Digest analyzed.\n")),
+            Err(e) => {
+                println!(
+                    "{}",
+                    colorize_txt(TextColor::Red, &format!("Error during analysis: {}\n", e))
+                );
+                return;
+            }
+        }
+
+        let event_count = engine.event_count_find_duplicates();
+        if event_count > 0 {
+            'discard_block: {
+                println!(
+                    "{}",
+                    colorize_txt(
+                        TextColor::BrightBlue,
+                        &format!("There are {} events that occurred during analysis. Press enter to view them, or 'd' to discard.\n", event_count)
+                    )
+                );
+
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).unwrap();
+
+                if input.trim() == "d" {
+                    break 'discard_block;
+                }
+
+                engine.print_log();
+            }
+        } else {
+            println!("No events occurred during analysis.\n");
+        }
+
+        println!("{}", colorize_txt(TextColor::BrightBlue, "\n######\n"));
     }
 }

@@ -8,8 +8,14 @@ pub struct FileMetadata {
 
 impl FileMetadata {
     pub fn new(last_modified: SystemTime, size: u64) -> Self {
+        let duration = last_modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let normalized_time =
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(duration.as_secs());
+
         FileMetadata {
-            last_modified,
+            last_modified: normalized_time,
             size,
         }
     }

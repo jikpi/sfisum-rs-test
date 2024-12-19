@@ -31,36 +31,6 @@ where
         }
     }
 
-    //when created from a concrete file on disk
-    pub fn new_from_concrete(path: PathBuf) -> io::Result<Self> {
-        let metadata = path.metadata()?;
-        let metadata = FileMetadata::new(metadata.modified()?, metadata.len());
-        Ok(FileSt {
-            path,
-            loaded_hash: None,
-            calculated_hash: None,
-            metadata,
-        })
-    }
-
-    pub fn check_exists(&mut self) -> bool {
-        if let Ok(exists) = self.path.try_exists() {
-            exists
-        } else {
-            false
-        }
-    }
-
-    pub fn update_metadata(&mut self) -> io::Result<()> {
-        match self.path.metadata() {
-            Ok(metadata) => {
-                self.metadata = FileMetadata::new(metadata.modified()?, metadata.len());
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
-    }
-
     pub fn calc_hash(&mut self) -> io::Result<()> {
         match H::new_hash_file(&self.path) {
             Ok(hash) => {

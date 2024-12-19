@@ -1,6 +1,5 @@
 use crate::file_rep::file_hasher::hash_file;
-use crate::file_rep::hash_def::{HashType, HashValue};
-use std::cmp::Ordering;
+use crate::file_rep::hash_def::{HashValue};
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::PathBuf;
@@ -9,16 +8,6 @@ use std::path::PathBuf;
 pub struct HashMD5([u8; 16]);
 
 impl HashValue for HashMD5 {
-    fn new(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() != 16 {
-            return None;
-        }
-
-        let array: [u8; 16] = bytes.try_into().ok()?;
-
-        Some(HashMD5(array))
-    }
-
     fn new_hash_file(path: &PathBuf) -> io::Result<Self> {
         let result = hash_file::<md5::Md5>(path)?;
         Ok(Self(result.into())) //directly convert since compile time known size
@@ -61,30 +50,11 @@ impl HashValue for HashMD5 {
         self.0 == other.0
     }
 
-    fn compare(&self, other: &Self) -> Ordering {
-        self.0.cmp(&other.0)
-    }
-
-    fn equals_bytes(&self, bytes: &[u8]) -> bool {
-        if bytes.len() != 16 {
-            return false;
-        }
-        if let Ok(array) = bytes.try_into() as Result<[u8; 16], _> {
-            self.0 == array
-        } else {
-            false
-        }
-    }
-
     fn to_string(&self) -> String {
         self.0
             .iter()
             .map(|byte| format!("{:02x}", byte))
             .collect::<String>()
-    }
-
-    fn hash_type() -> HashType {
-        HashType::MD5
     }
 
     fn parse_hash_type_string<S: AsRef<str>>(input: S) -> bool {
