@@ -120,14 +120,14 @@ where
             small_files
                 .par_iter_mut()
                 .enumerate()
-                .try_for_each(|(local_idx, file)| {
+                .try_for_each(|(local_index, file)| {
                     if interrupt_flag_clone.load(Ordering::SeqCst) {
                         return Err(());
                     }
 
                     if let Err(_) = file.calc_hash() {
                         if let Ok(mut failed) = failed_indexes_clone.lock() {
-                            failed.push(small_indexes[local_idx]);
+                            failed.push(small_indexes[local_index]);
                         }
                     }
 
@@ -161,14 +161,14 @@ where
             large_files
                 .par_iter_mut()
                 .enumerate()
-                .try_for_each(|(local_idx, file)| {
+                .try_for_each(|(local_index, file)| {
                     if interrupt_flag_clone.load(Ordering::SeqCst) {
                         return Err(());
                     }
 
                     if let Err(_) = file.calc_hash() {
                         if let Ok(mut failed) = failed_indexes_clone.lock() {
-                            failed.push(large_indexes[local_idx]);
+                            failed.push(large_indexes[local_index]);
                         }
                     }
 
