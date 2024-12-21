@@ -1132,5 +1132,3 @@ where
         self.duplicate_files_index.len()
     }
 }
-
-//todo: filter out files based on date created and digest creation
