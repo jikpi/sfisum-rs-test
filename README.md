@@ -1,6 +1,8 @@
 # Program for Smart Generation and Verification of File Checksums
 
-Main Functionalities:
+The original concept written in rust.
+
+## Key features:
 
 + 'Generate': Generates DD files (Directory Digest - a checksum file for directories) for a specified directory
 + 'Check': Verifies checksums for a directory using DD (with an option to save a new DD file if errors are found)
