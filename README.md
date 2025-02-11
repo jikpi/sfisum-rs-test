@@ -1,6 +1,6 @@
 # Program for Smart Generation and Verification of File Checksums
 
-The original concept written in rust.
+The original concept written in rust. Replaced with implementation in C#.
 
 ## Key features:
 
@@ -21,11 +21,3 @@ File Information Stored:
 - File size
 
 Usage: This program uses a console-based user interface.
-
-## TODO:
-
-- Implement calculation of checksums for files older than a specified time/date in fast refresh
-- Add option to save checksums after completing the 'Check' process
-- Add support for creation date tracking
-- In fast and full refresh modes, list only files with creation or modification dates older/newer than the digest file's
-  creation date
